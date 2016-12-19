@@ -1,5 +1,9 @@
 require "nn"
 require "optim"
+require "cutorch"
+require "cunn"
+
+cutorch.setDevice(1)
 
 function process_fasta(file) 
   --file='chr20.fa'
@@ -32,7 +36,7 @@ function sample(seq,l,m,n)
   for i=1,n do
     out[i][1][1]:copy(seq:narrow(1,r[i],l))
   end
-  return out,r:double()
+  return out,r:double()-seq:size()[1]/2
 end
 
 function make_model(l) 
@@ -67,8 +71,15 @@ end
 
 --lets load the float
 seq = torch.load('chr20.t7')
-m=make_model(20)
+m=make_model(20):cuda()
 
+m:training()
+
+m.admState = {
+  epsilon = 1e-4,
+  learningRate = 0.01,
+  weightDecay = 0
+}
 
 m.rmsState = {
   learningRate = 0.01,
@@ -81,10 +92,13 @@ if m.parameters_flat == nil then
 end
 local parameters, gradParameters = m.parameters_flat, m.gradParameters_flat
 
-local mb_sz=128
+local mb_sz=64
 
-for i=1,10 do
+
+for i=1,10000 do
   local d,t = sample(seq,100,0,mb_sz)
+  d=d:cuda()
+  t=t:cuda()
   local feval = function(x)
       if x ~= parameters then
         parameters:copy(x)
@@ -96,6 +110,7 @@ for i=1,10 do
       m:backward(d,df_do) 
       return cost,gradParameters
   end
-  _,f=optim.rmsprop(feval, parameters, m.rmsState)
-  print(cost)
+  --_,f=optim.rmsprop(feval, parameters, m.rmsState)
+  _,f=optim.adam(feval, parameters, m.admState)
+  print(cost,predictions:mean())
 end
